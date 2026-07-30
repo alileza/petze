@@ -45,7 +45,9 @@ and who's responsible:
 
 The overlay stays fully click-through; hovering is detected by watching the
 cursor position, so no clicks are ever swallowed. Per-app stats are sampled
-(via `ps`) only while the tooltip is visible.
+(via `ps`, and `nettop` for network) only while the tooltip is visible —
+network attribution needs two samples 1s apart, so it appears a beat after
+the others.
 
 The real thing — actual screen pixels, manual mode, all lines pinned (blue
 battery = full on AC, green CPU = calm, yellow memory = getting warm):

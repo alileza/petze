@@ -355,9 +355,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverBandSlots = 0
     private var tooltipVisible = false
 
-    // Per-app contributors, sampled via ps only while the tooltip is up.
+    // Per-app contributors, sampled via ps/nettop only while the tooltip is up.
     private var contribCPU: String?
     private var contribMem: String?
+    private var contribNetIn: String?
+    private var contribNetOut: String?
     private var contribFetchedAt = Date.distantPast
     private var fetchingContrib = false
 
@@ -558,7 +560,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let entries = hoverEntries.map { entry in
                 (color: entry.color, text: entry.text,
                  detail: entry.key == "cpu" ? contribCPU
-                       : entry.key == "memory" ? contribMem : nil)
+                       : entry.key == "memory" ? contribMem
+                       : entry.key == "netin" ? contribNetIn
+                       : entry.key == "netout" ? contribNetOut : nil)
             }
             tooltip.show(entries: entries, near: mouse,
                          position: position, screen: screen)
@@ -568,21 +572,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Top apps by CPU and memory, aggregated from `ps` on a background
+    /// Top apps by CPU, memory, and network, aggregated on a background
     /// queue. Only runs while the tooltip is showing, at most every 3s.
+    /// nettop needs two samples 1s apart, so network details arrive a
+    /// beat after the CPU/memory ones.
     private func fetchContributorsIfStale() {
         guard !fetchingContrib, Date().timeIntervalSince(contribFetchedAt) > 3 else { return }
         fetchingContrib = true
+        let wantNet = hoverEntries.contains { $0.key == "netin" || $0.key == "netout" }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.topProcesses()
+            let processes = Self.topProcesses()
+            DispatchQueue.main.async {
+                self?.contribCPU = processes.cpu
+                self?.contribMem = processes.mem
+            }
+            let network = wantNet ? Self.topNetwork() : (nil, nil)
+            if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
+                FileHandle.standardError.write(Data(
+                    "contrib: wantNet=\(wantNet) in=\(network.0 ?? "nil") out=\(network.1 ?? "nil")\n".utf8))
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.fetchingContrib = false
                 self.contribFetchedAt = Date()
-                self.contribCPU = result.cpu
-                self.contribMem = result.mem
+                self.contribNetIn = network.0
+                self.contribNetOut = network.1
             }
         }
+    }
+
+    /// Per-app network rates from two nettop samples taken 1s apart.
+    private static func topNetwork() -> (String?, String?) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
+        task.arguments = ["-P", "-x", "-L", "2", "-s", "1", "-J", "bytes_in,bytes_out"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return (nil, nil) }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return (nil, nil) }
+
+        // Rows are "process.pid,bytes_in,bytes_out,"; each sample block is
+        // preceded by a ",bytes_in,bytes_out," header row. Counters are
+        // cumulative, so rate = (second sample - first sample) / 1s.
+        var samples: [[String: (inBytes: Double, outBytes: Double)]] = []
+        var current: [String: (inBytes: Double, outBytes: Double)] = [:]
+        for line in output.split(separator: "\n") {
+            let cols = line.split(separator: ",", omittingEmptySubsequences: false)
+            guard cols.count >= 3 else { continue }
+            if cols[1] == "bytes_in" { // header row starts a new sample block
+                if !current.isEmpty { samples.append(current); current = [:] }
+                continue
+            }
+            guard !cols[0].isEmpty,
+                  let bytesIn = Double(cols[1]), let bytesOut = Double(cols[2])
+            else { continue }
+            var name = String(cols[0])
+            if let dot = name.lastIndex(of: ".") { name = String(name[..<dot]) }
+            let sums = current[name] ?? (0, 0)
+            current[name] = (sums.inBytes + bytesIn, sums.outBytes + bytesOut)
+        }
+        if !current.isEmpty { samples.append(current) }
+        guard samples.count >= 2, let first = samples.first, let last = samples.last
+        else { return (nil, nil) }
+
+        var inRates: [(String, Double)] = []
+        var outRates: [(String, Double)] = []
+        for (name, counts) in last {
+            let earlier = first[name] ?? (0, 0)
+            let dIn = max(0, counts.inBytes - earlier.inBytes)
+            let dOut = max(0, counts.outBytes - earlier.outBytes)
+            if dIn >= 5_000 { inRates.append((name, dIn)) }
+            if dOut >= 5_000 { outRates.append((name, dOut)) }
+        }
+        func fmt(_ list: [(String, Double)]) -> String? {
+            let top = list.sorted { $0.1 > $1.1 }.prefix(3)
+                .map { "\($0.0) \(rate($0.1))" }
+                .joined(separator: " · ")
+            return top.isEmpty ? nil : top
+        }
+        return (fmt(inRates), fmt(outRates))
     }
 
     private static func topProcesses() -> (cpu: String?, mem: String?) {
