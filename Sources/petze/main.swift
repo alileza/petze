@@ -323,6 +323,44 @@ final class TooltipWindow: NSWindow {
     }
 }
 
+// MARK: - Big rings (popover)
+
+final class BigRingsView: NSView {
+    var rings: [(fraction: Double?, color: NSColor)] = [] { didSet { needsDisplay = true } }
+    var centerText = "" { didSet { needsDisplay = true } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 150, height: 150) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let center = NSPoint(x: bounds.midX, y: bounds.midY)
+        var radius = min(bounds.width, bounds.height) / 2 - 7
+        for ring in rings {
+            let track = NSBezierPath()
+            track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+            track.lineWidth = 11
+            ring.color.withAlphaComponent(0.22).setStroke()
+            track.stroke()
+            if let fraction = ring.fraction, fraction > 0.005 {
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                              endAngle: 90 - 360 * min(fraction, 1), clockwise: true)
+                arc.lineWidth = 11
+                arc.lineCapStyle = .round
+                ring.color.setStroke()
+                arc.stroke()
+            }
+            radius -= 15
+        }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 17, weight: .semibold),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let str = NSAttributedString(string: centerText, attributes: attrs)
+        let size = str.size()
+        str.draw(at: NSPoint(x: center.x - size.width / 2, y: center.y - size.height / 2))
+    }
+}
+
 // MARK: - Overlay window (transparent, click-through, above everything)
 
 final class OverlayWindow: NSWindow {
@@ -352,6 +390,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let cpu = CPUSampler()
     private let net = NetworkSampler()
     private let tooltip = TooltipWindow()
+
+    // Click-the-rings popover: big rings + all values + contributors.
+    private let popover = NSPopover()
+    private let bigRings = BigRingsView()
+    private let detailText = NSTextField(labelWithString: "")
+    private var popoverRows: [(key: String, color: NSColor, text: String)] = []
+    private var ringData: [(fraction: Double?, color: NSColor)] = []
+    private var ringCenter = ""
 
     // Latest values for the hover tooltip, rebuilt on every refresh.
     private var hoverEntries: [(key: String, color: NSColor, text: String)] = []
@@ -398,6 +444,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(togglePopover)
+
+        detailText.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        detailText.maximumNumberOfLines = 0
+        let quit = NSButton(title: "Quit petze", target: NSApp,
+                            action: #selector(NSApplication.terminate(_:)))
+        quit.bezelStyle = .inline
+        quit.controlSize = .small
+        let stack = NSStackView(views: [bigRings, detailText, quit])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 12, right: 18)
+        let controller = NSViewController()
+        controller.view = stack
+        popover.contentViewController = controller
+        popover.behavior = .transient
+
         rebuildOverlays()
         _ = cpu.sample() // prime counters so the first refresh has deltas
         _ = net.sample()
@@ -413,6 +478,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+
+        if ProcessInfo.processInfo.environment["PETZE_SHOWPOPOVER"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.togglePopover()
+            }
+        }
     }
 
     @objc private func screensChanged() {
@@ -519,6 +590,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverEntries = entries
         hoverBandSlots = slot
 
+        // Popover always shows every metric, independent of line visibility.
+        popoverRows = metricOrder.compactMap { key, _ in
+            guard let value = values[key] ?? nil, let text = labels[key] ?? nil
+            else { return nil }
+            return (key, value.color, text)
+        }
+        ringData = [
+            (battery.isPresent ? battery.percent : nil, battery.color),
+            (cpuLoad, cpuLoad.map { loadColor($0) } ?? .gray),
+            (memory?.fraction, memory.map { loadColor($0.fraction) } ?? .gray),
+        ]
+        ringCenter = battery.isPresent
+            ? "\(Int((battery.percent * 100).rounded()))%" : ""
+        if popover.isShown {
+            fetchContributorsIfStale()
+            updatePopoverContent()
+        }
+
         if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
             let desc = metrics.map { "\($0.key)=\(String(format: "%.2f", $0.fraction))" }
             let raw = "auto=\(autoMode) battPresent=\(battery.isPresent) "
@@ -585,12 +674,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func fetchContributorsIfStale() {
         guard !fetchingContrib, Date().timeIntervalSince(contribFetchedAt) > 3 else { return }
         fetchingContrib = true
-        let wantNet = hoverEntries.contains { $0.key == "netin" || $0.key == "netout" }
+        let wantNet = popover.isShown
+            || hoverEntries.contains { $0.key == "netin" || $0.key == "netout" }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let processes = Self.topProcesses()
             DispatchQueue.main.async {
                 self?.contribCPU = processes.cpu
                 self?.contribMem = processes.mem
+                if self?.popover.isShown == true { self?.updatePopoverContent() }
             }
             let network = wantNet ? Self.topNetwork() : (nil, nil)
             if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
@@ -603,6 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.contribFetchedAt = Date()
                 self.contribNetIn = network.0
                 self.contribNetOut = network.1
+                if self.popover.isShown { self.updatePopoverContent() }
             }
         }
     }
@@ -746,81 +838,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.image?.isTemplate = false
         button.title = ""
         button.toolTip = hoverEntries.map(\.text).joined(separator: "\n")
-        statusItem.menu = buildMenu()
     }
 
-    private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let linesHeader = NSMenuItem(title: "Lines", action: nil, keyEquivalent: "")
-        linesHeader.isEnabled = false
-        menu.addItem(linesHeader)
-
-        let auto = NSMenuItem(title: "Automatic — only what matters",
-                              action: #selector(selectAuto), keyEquivalent: "")
-        auto.target = self
-        auto.state = autoMode ? .on : .off
-        menu.addItem(auto)
-
-        let manual = NSMenuItem(title: "Manual", action: #selector(selectManual), keyEquivalent: "")
-        manual.target = self
-        manual.state = autoMode ? .off : .on
-        menu.addItem(manual)
-
-        for metric in metricOrder {
-            let item = NSMenuItem(title: metric.title,
-                                  action: autoMode ? nil : #selector(toggleMetric(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.indentationLevel = 1
-            item.representedObject = metric.key
-            item.state = (autoMode ? autoShown.contains(metric.key)
-                                   : isEnabled(metric.key)) ? .on : .off
-            menu.addItem(item)
+    @objc private func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+        } else if let button = statusItem.button {
+            updatePopoverContent()
+            fetchContributorsIfStale()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
+    }
 
-        menu.addItem(.separator())
-        let posHeader = NSMenuItem(title: "Line position", action: nil, keyEquivalent: "")
-        posHeader.isEnabled = false
-        menu.addItem(posHeader)
-        for pos in LinePosition.allCases {
-            let item = NSMenuItem(title: pos.title,
-                                  action: #selector(selectPosition(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = pos.rawValue
-            item.state = pos == position ? .on : .off
-            menu.addItem(item)
+    private func updatePopoverContent() {
+        bigRings.rings = ringData
+        bigRings.centerText = ringCenter
+
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+        let detailFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let text = NSMutableAttributedString()
+        for (index, row) in popoverRows.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: "\n")) }
+            text.append(NSAttributedString(string: "● ", attributes: [
+                .foregroundColor: row.color, .font: font]))
+            text.append(NSAttributedString(string: row.text, attributes: [
+                .foregroundColor: NSColor.labelColor, .font: font]))
+            let detail = row.key == "cpu" ? contribCPU
+                       : row.key == "memory" ? contribMem
+                       : row.key == "netin" ? contribNetIn
+                       : row.key == "netout" ? contribNetOut : nil
+            if let detail {
+                text.append(NSAttributedString(string: "\n   " + detail, attributes: [
+                    .foregroundColor: NSColor.secondaryLabelColor, .font: detailFont]))
+            }
         }
-
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit petze",
-                              action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quit)
-        return menu
+        detailText.attributedStringValue = text
     }
 
-    @objc private func selectAuto() {
-        autoMode = true
-        refresh()
-    }
-
-    @objc private func selectManual() {
-        autoMode = false
-        refresh()
-    }
-
-    @objc private func toggleMetric(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        UserDefaults.standard.set(!isEnabled(key), forKey: "show.\(key)")
-        refresh()
-    }
-
-    @objc private func selectPosition(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let pos = LinePosition(rawValue: raw) else { return }
-        position = pos
-        refresh()
-    }
 }
 
 // MARK: - Entry point

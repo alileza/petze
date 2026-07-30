@@ -33,36 +33,41 @@ func drawIcon(canvas: CGFloat) -> NSImage {
 
     squircle.setClip()
 
-    // the product: health lines hugging the top edge, stacked inward
-    let lineHeight = rect.height * 0.075
-    let gap = lineHeight * 0.55
-    let lines: [(width: CGFloat, color: NSColor)] = [
-        (0.86, NSColor(calibratedRed: 0.0, green: 0.86, blue: 0.50, alpha: 1)),  // green
-        (0.42, NSColor(calibratedRed: 0.96, green: 0.77, blue: 0.09, alpha: 1)), // yellow
-        (0.62, NSColor(calibratedRed: 0.19, green: 0.69, blue: 0.78, alpha: 1)), // teal
+    // the product: health rings — battery, CPU, memory
+    let center = NSPoint(x: rect.midX, y: rect.midY)
+    let rings: [(fraction: CGFloat, color: NSColor)] = [
+        (0.82, NSColor(calibratedRed: 0.0, green: 0.86, blue: 0.50, alpha: 1)),  // green
+        (0.55, NSColor(calibratedRed: 0.96, green: 0.77, blue: 0.09, alpha: 1)), // yellow
+        (0.34, NSColor(calibratedRed: 0.19, green: 0.69, blue: 0.78, alpha: 1)), // teal
     ]
-    var y = rect.maxY - rect.height * 0.13 - lineHeight
-    for line in lines {
-        let bar = NSRect(x: rect.minX, y: y,
-                         width: rect.width * line.width, height: lineHeight)
-        line.color.setFill()
-        NSBezierPath(roundedRect: bar,
-                     xRadius: lineHeight / 2, yRadius: lineHeight / 2).fill()
-        // subtle glow
-        line.color.withAlphaComponent(0.25).setFill()
-        NSBezierPath(roundedRect: bar.insetBy(dx: -lineHeight * 0.35,
-                                              dy: -lineHeight * 0.35),
-                     xRadius: lineHeight, yRadius: lineHeight).fill()
-        y -= lineHeight + gap
-    }
+    let ringWidth = rect.width * 0.062
+    var radius = rect.width * 0.34
+    for ring in rings {
+        let track = NSBezierPath()
+        track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        track.lineWidth = ringWidth
+        ring.color.withAlphaComponent(0.22).setStroke()
+        track.stroke()
 
-    // faint bottom hint of a desktop horizon
-    let horizon = NSRect(x: rect.minX, y: rect.minY,
-                         width: rect.width, height: rect.height * 0.30)
-    NSGradient(colors: [
-        NSColor(calibratedWhite: 1.0, alpha: 0.06),
-        NSColor(calibratedWhite: 1.0, alpha: 0.0),
-    ])!.draw(in: horizon, angle: 90)
+        // subtle glow behind the arc
+        let glow = NSBezierPath()
+        glow.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                       endAngle: 90 - 360 * ring.fraction, clockwise: true)
+        glow.lineWidth = ringWidth * 1.5
+        glow.lineCapStyle = .round
+        ring.color.withAlphaComponent(0.14).setStroke()
+        glow.stroke()
+
+        let arc = NSBezierPath()
+        arc.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                      endAngle: 90 - 360 * ring.fraction, clockwise: true)
+        arc.lineWidth = ringWidth
+        arc.lineCapStyle = .round
+        ring.color.setStroke()
+        arc.stroke()
+
+        radius -= ringWidth * 1.75
+    }
 
     img.unlockFocus()
     return img

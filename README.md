@@ -73,19 +73,23 @@ purple = outbound.
 
 The menu bar icon is a tiny set of activity-style rings — outer = battery,
 middle = CPU, inner = memory — using the same color language as the lines.
-Hover it for the exact numbers. If you find lines on your screen too
-disruptive, the rings can carry the whole signal.
+Hover it for the exact numbers.
 
-## Positions
+**Click the rings** for the full picture: a popover with big rings, every
+metric's exact value, and the apps responsible for CPU, memory, and network
+usage. Quit from the bottom of the popover.
 
-Click the menu bar rings to choose where the lines live:
+## Overlay position
 
-- **Top edge** — lines grow left → right along the top of the screen
-- **Bottom edge** — same, along the bottom
-- **Around screen** — lines travel clockwise around the screen border starting
-  at the top-left corner, nested one inside the other; a full metric draws a
-  complete frame
-- **Hidden — menu bar only** — no lines at all; just the rings
+The screen-edge lines are optional. Set where they live (or hide them) via:
+
+```bash
+defaults write dev.alileza.petze position top        # or: bottom, perimeter, off
+```
+
+`top`/`bottom` grow left → right along that edge; `perimeter` travels
+clockwise around the screen border from the top-left corner; `off` hides the
+lines entirely — the menu bar rings carry the whole signal.
 
 Mode, position, and line toggles are remembered across launches. The overlay
 is click-through and appears on every connected display and every Space.
