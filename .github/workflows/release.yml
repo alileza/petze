@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DMG
+        run: VERSION="${GITHUB_REF_NAME#v}" ./make-dmg.sh
+      - name: Verify bundle version matches tag
+        run: |
+          hdiutil attach petze.dmg -quiet
+          plist=/Volumes/petze/petze.app/Contents/Info.plist
+          got=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$plist")
+          hdiutil detach /Volumes/petze -quiet
+          test "$got" = "${GITHUB_REF_NAME#v}"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" petze.dmg \
+            --title "petze $GITHUB_REF_NAME" \
+            --generate-notes

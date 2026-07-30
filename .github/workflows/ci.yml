@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (debug)
+        run: swift build
+      - name: Build DMG (universal release, via make-app.sh)
+        run: ./make-dmg.sh
+      - name: Verify DMG contents
+        run: |
+          hdiutil attach petze.dmg -quiet
+          test -d /Volumes/petze/petze.app
+          test -L /Volumes/petze/Applications
+          lipo -info /Volumes/petze/petze.app/Contents/MacOS/petze | grep -q arm64
+          hdiutil detach /Volumes/petze -quiet

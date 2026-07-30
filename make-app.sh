@@ -1,7 +1,9 @@
 #!/bin/bash
 # Bundle a universal (arm64 + x86_64) release binary into petze.app
+# VERSION=1.2.3 ./make-app.sh sets the bundle version (default 0.0.0-dev).
 set -e
 cd "$(dirname "$0")"
+VERSION="${VERSION:-0.0.0-dev}"
 
 if swift build -c release --arch arm64 --arch x86_64 2>/dev/null; then
     BIN=.build/apple/Products/Release/petze
@@ -16,7 +18,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/petze"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-cat > "$APP/Contents/Info.plist" <<'EOF'
+cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -26,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleName</key><string>petze</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
 </dict>

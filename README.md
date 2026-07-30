@@ -1,5 +1,7 @@
 # petze
 
+[![CI](https://github.com/alileza/petze/actions/workflows/ci.yml/badge.svg)](https://github.com/alileza/petze/actions/workflows/ci.yml)
+
 A tiny macOS menu bar app that shows your laptop's health as thin lines drawn
 on the edge of your screen. Each line's length is the metric's level; its
 color tells you how healthy it is. Lines stack from the screen edge inward:
@@ -72,6 +74,18 @@ swift build -c release
 `./make-dmg.sh` builds a universal (Apple Silicon + Intel) drag-install DMG;
 `swift make-icon.swift && iconutil -c icns AppIcon.iconset` regenerates the
 app icon.
+
+## Releasing
+
+Releases follow [semver](https://semver.org) and are fully automated: push a
+`vX.Y.Z` tag and GitHub Actions builds the universal DMG, verifies the bundle
+version matches the tag, and publishes the GitHub release with generated notes.
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+CI builds the app and DMG on every push and pull request.
 
 Or bundle it as an app (so you can put it in Applications / Login Items):
 
