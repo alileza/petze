@@ -1,6 +1,12 @@
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="petze icon">
+</p>
+
 # petze
 
 [![CI](https://github.com/alileza/petze/actions/workflows/ci.yml/badge.svg)](https://github.com/alileza/petze/actions/workflows/ci.yml)
+
+![petze — your laptop's health, drawn on the edge of your screen](docs/hero.png)
 
 A tiny macOS menu bar app that shows your laptop's health as thin lines drawn
 on the edge of your screen. Each line's length is the metric's level; its
@@ -26,6 +32,11 @@ Entry and exit thresholds differ (hysteresis) so lines don't flicker at the
 boundary.
 
 **Manual** lets you pin exactly the lines you want, from the menu bar icon.
+
+The real thing — actual screen pixels, manual mode, all lines pinned (blue
+battery = full on AC, green CPU = calm, yellow memory = getting warm):
+
+![the actual pixels: petze lines over the macOS menu bar](docs/strip.png)
 
 ## Colors
 
