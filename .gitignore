@@ -3,3 +3,5 @@ petze.app/
 .DS_Store
 *.log
 .swiftpm/
+petze.dmg
+AppIcon.iconset/

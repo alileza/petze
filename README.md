@@ -53,12 +53,25 @@ Click the menu bar icon (⚡/− plus percentage) to choose where the lines live
 Mode, position, and line toggles are remembered across launches. The overlay
 is click-through and appears on every connected display and every Space.
 
+## Install
+
+Grab [the latest petze.dmg](https://github.com/alileza/petze/releases/latest/download/petze.dmg),
+open it, and drag petze into Applications. The app is unsigned (no Apple
+Developer ID), so on first launch right-click → Open, or allow it under
+System Settings → Privacy & Security.
+
+To start at login: System Settings → General → Login Items → add petze.
+
 ## Build & run
 
 ```bash
 swift build -c release
 .build/release/petze
 ```
+
+`./make-dmg.sh` builds a universal (Apple Silicon + Intel) drag-install DMG;
+`swift make-icon.swift && iconutil -c icns AppIcon.iconset` regenerates the
+app icon.
 
 Or bundle it as an app (so you can put it in Applications / Login Items):
 
