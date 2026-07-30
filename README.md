@@ -7,8 +7,23 @@ color tells you how healthy it is. Lines stack from the screen edge inward:
 1. **Battery** (outermost) — length = charge level
 2. **CPU load** — length = total CPU usage
 3. **Memory used** — length = fraction of RAM in use (active + wired + compressed)
+4. **Network in / out** — log-scaled throughput (each quarter of the line is
+   one decade, 10 KB/s → 100 MB/s)
 
-Toggle any of them from the menu bar icon.
+## Display modes
+
+**Automatic** (default) shows only what matters right now — on a quiet machine
+that's a single memory line. Other lines appear when they have something to
+say and retract when the moment passes:
+
+- **Battery** appears while charging, or when discharging below ~40%
+- **CPU** appears when load crosses 60%, retracts once it calms below 45%
+- **Network** lines appear above ~500 KB/s sustained, retract below 100 KB/s
+
+Entry and exit thresholds differ (hysteresis) so lines don't flicker at the
+boundary.
+
+**Manual** lets you pin exactly the lines you want, from the menu bar icon.
 
 ## Colors
 
@@ -22,7 +37,8 @@ Battery color = what the battery is doing:
 | Red    | Discharging, 20% or below        |
 
 CPU and memory color = how loaded they are: green below 60%, yellow below
-85%, red above.
+85%, red above. Network lines have fixed identities: teal = inbound,
+purple = outbound.
 
 ## Positions
 
@@ -34,8 +50,8 @@ Click the menu bar icon (⚡/− plus percentage) to choose where the lines live
   at the top-left corner, nested one inside the other; a full metric draws a
   complete frame
 
-Position and line toggles are remembered across launches. The overlay is click-through and
-appears on every connected display and every Space.
+Mode, position, and line toggles are remembered across launches. The overlay
+is click-through and appears on every connected display and every Space.
 
 ## Build & run
 

@@ -287,9 +287,9 @@
   <span class="eyebrow"><span class="dot"></span> Native macOS · menu bar only</span>
   <h1>Your laptop's health, drawn as a line on the edge of your screen.</h1>
   <p class="lede">
-    petze renders battery, CPU, and memory as thin color-coded lines that hug the
-    edge of your display — always visible, never in the way. No Dock icon, no
-    windows, no cloud. Just ~350 lines of Swift and AppKit.
+    petze renders battery, CPU, memory, and network as thin color-coded lines that
+    hug the edge of your display — and by default it shows only what matters right
+    now. No Dock icon, no windows, no cloud. Just ~500 lines of Swift and AppKit.
   </p>
   <div class="cta-row">
     <a class="btn primary" href="https://github.com/alileza/petze">View on GitHub</a>
@@ -329,9 +329,10 @@
   <div class="features">
     <div class="feature">
       <div class="icon green">▁</div>
-      <h3>Battery, CPU &amp; memory</h3>
-      <p>Battery hugs the screen edge, CPU stacks inside it, memory inside that.
-         Toggle any of them from the menu bar icon.</p>
+      <h3>Only what matters</h3>
+      <p>Automatic mode shows a single memory line on a quiet machine. Battery
+         appears when charging or running low, CPU when it crosses 60%, network
+         when traffic flows — and each retracts when the moment passes.</p>
     </div>
     <div class="feature">
       <div class="icon blue">⌘</div>
@@ -354,13 +355,14 @@
     <div class="feature">
       <div class="icon red">♥</div>
       <h3>Honest system data</h3>
-      <p>IOKit power sources for battery, mach host statistics for CPU and memory —
-         the same numbers <code>top</code> and <code>pmset</code> report.</p>
+      <p>IOKit power sources for battery, mach host statistics for CPU and memory,
+         interface counters for network — the same numbers <code>top</code>,
+         <code>pmset</code>, and <code>nettop</code> report.</p>
     </div>
     <div class="feature">
       <div class="icon blue">◎</div>
       <h3>Nothing else</h3>
-      <p>No Dock icon, no login nag, no analytics, no network access at all.
+      <p>No Dock icon, no login nag, no analytics, no phoning home.
          Quit it from the menu bar and it's gone.</p>
     </div>
   </div>
@@ -388,6 +390,11 @@
         <tr><td><span class="swatch green"></span></td><td>Below 60% — all quiet</td></tr>
         <tr><td><span class="swatch yellow"></span></td><td>60–85% — working hard</td></tr>
         <tr><td><span class="swatch red"></span></td><td>Above 85% — under pressure</td></tr>
+      </table>
+      <h3 style="margin-top:24px">Network lines</h3>
+      <table class="req">
+        <tr><td><span class="swatch" style="background:#30b0c7"></span></td><td>Inbound — log scale, 10 KB/s → 100 MB/s</td></tr>
+        <tr><td><span class="swatch" style="background:var(--accent-purple)"></span></td><td>Outbound — same scale</td></tr>
       </table>
     </div>
   </div>
