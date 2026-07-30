@@ -106,6 +106,49 @@ func memoryUsedFraction() -> Double? {
     return used / Double(ProcessInfo.processInfo.physicalMemory)
 }
 
+// MARK: - Network
+
+/// Bytes/sec in and out, summed over non-loopback interfaces.
+final class NetworkSampler {
+    private var prevIn: UInt64 = 0
+    private var prevOut: UInt64 = 0
+    private var prevTime: TimeInterval = 0
+
+    func sample() -> (inBps: Double, outBps: Double)? {
+        var totalIn: UInt64 = 0, totalOut: UInt64 = 0
+        var addrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrs) == 0 else { return nil }
+        defer { freeifaddrs(addrs) }
+
+        var cursor = addrs
+        while let ifa = cursor?.pointee {
+            defer { cursor = ifa.ifa_next }
+            guard let sa = ifa.ifa_addr, sa.pointee.sa_family == UInt8(AF_LINK),
+                  let data = ifa.ifa_data else { continue }
+            if String(cString: ifa.ifa_name).hasPrefix("lo") { continue }
+            let stats = data.assumingMemoryBound(to: if_data.self).pointee
+            totalIn &+= UInt64(stats.ifi_ibytes)
+            totalOut &+= UInt64(stats.ifi_obytes)
+        }
+
+        let now = Date().timeIntervalSinceReferenceDate
+        defer { prevIn = totalIn; prevOut = totalOut; prevTime = now }
+        guard prevTime > 0, now > prevTime else { return nil }
+        let dt = now - prevTime
+        // per-interface counters can wrap (32-bit); treat a wrap as zero delta
+        let dIn = totalIn >= prevIn ? Double(totalIn &- prevIn) : 0
+        let dOut = totalOut >= prevOut ? Double(totalOut &- prevOut) : 0
+        return (dIn / dt, dOut / dt)
+    }
+}
+
+/// Throughput has no natural 100%, so the line is log-scaled: 10 KB/s rounds
+/// to zero, then each quarter of the line is one decade up to 100 MB/s.
+func netFraction(_ bps: Double) -> CGFloat {
+    guard bps > 10_000 else { return 0 }
+    return CGFloat(min(log10(bps / 10_000) / 4.0, 1))
+}
+
 // MARK: - Overlay position
 
 enum LinePosition: String, CaseIterable {
@@ -239,14 +282,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windows: [OverlayWindow] = []
     private var timer: Timer?
     private let cpu = CPUSampler()
+    private let net = NetworkSampler()
 
-    // Metric toggles, outermost first. Battery hugs the screen edge,
-    // CPU stacks inside it, memory inside that.
+    // Keys of lines auto mode is currently showing; entry and exit use
+    // different thresholds so lines don't flap at the boundary.
+    private var autoShown: Set<String> = []
+
+    // Stacking order, outermost first. Battery hugs the screen edge,
+    // the rest nest inward.
     private let metricOrder: [(key: String, title: String)] = [
         ("battery", "Battery"),
         ("cpu", "CPU load"),
         ("memory", "Memory used"),
+        ("netin", "Network in"),
+        ("netout", "Network out"),
     ]
+
+    private var autoMode: Bool = {
+        UserDefaults.standard.object(forKey: "autoMode") as? Bool ?? true
+    }() {
+        didSet { UserDefaults.standard.set(autoMode, forKey: "autoMode") }
+    }
 
     private var position: LinePosition = {
         LinePosition(rawValue: UserDefaults.standard.string(forKey: "position") ?? "") ?? .top
@@ -261,7 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         rebuildOverlays()
-        _ = cpu.sample() // prime tick counters so the first refresh has a delta
+        _ = cpu.sample() // prime counters so the first refresh has deltas
+        _ = net.sample()
         refresh()
 
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -287,29 +344,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Auto mode: memory is the always-on anchor; everything else appears
+    /// only while it has something to say. Entry thresholds are higher than
+    /// exit thresholds (hysteresis) so lines don't flicker at the boundary.
+    private func autoWants(_ key: String, battery: BatteryState,
+                           cpuLoad: Double?, netRate: Double?) -> Bool {
+        let shown = autoShown.contains(key)
+        switch key {
+        case "memory":
+            return true
+        case "battery":
+            guard battery.isPresent else { return false }
+            if battery.isCharging { return true }
+            if battery.onAC { return false } // full / holding: nothing to say
+            return battery.percent <= (shown ? 0.45 : 0.40)
+        case "cpu":
+            guard let load = cpuLoad else { return shown }
+            return load >= (shown ? 0.45 : 0.60)
+        case "netin", "netout":
+            guard let rate = netRate else { return shown }
+            return rate >= (shown ? 100_000 : 500_000)
+        default:
+            return false
+        }
+    }
+
     private func refresh() {
         let battery = BatteryState.read()
-        var metrics: [Metric] = []
-        var slot = 0 // enabled metrics keep their row even while a sample is pending
+        let cpuLoad = cpu.sample()
+        let memUsed = memoryUsedFraction()
+        let netRates = net.sample()
 
-        if isEnabled("battery") {
-            if battery.isPresent {
-                metrics.append(Metric(key: "battery", slot: slot,
-                                      fraction: battery.percent, color: battery.color))
+        let values: [String: (fraction: CGFloat, color: NSColor)?] = [
+            "battery": battery.isPresent
+                ? (CGFloat(battery.percent), battery.color) : nil,
+            "cpu": cpuLoad.map { (CGFloat($0), loadColor($0)) },
+            "memory": memUsed.map { (CGFloat($0), loadColor($0)) },
+            "netin": netRates.map { (netFraction($0.inBps), NSColor.systemTeal) },
+            "netout": netRates.map { (netFraction($0.outBps), NSColor.systemPurple) },
+        ]
+
+        var metrics: [Metric] = []
+        var slot = 0 // active metrics keep their row even while a sample is pending
+        for (key, _) in metricOrder {
+            let active: Bool
+            if autoMode {
+                let netRate = key == "netin" ? netRates?.inBps
+                            : key == "netout" ? netRates?.outBps : nil
+                active = autoWants(key, battery: battery,
+                                   cpuLoad: cpuLoad, netRate: netRate)
+                if active { autoShown.insert(key) } else { autoShown.remove(key) }
+            } else {
+                active = isEnabled(key)
             }
-            slot += 1
-        }
-        if isEnabled("cpu") {
-            if let load = cpu.sample() {
-                metrics.append(Metric(key: "cpu", slot: slot,
-                                      fraction: load, color: loadColor(load)))
-            }
-            slot += 1
-        }
-        if isEnabled("memory") {
-            if let used = memoryUsedFraction() {
-                metrics.append(Metric(key: "memory", slot: slot,
-                                      fraction: used, color: loadColor(used)))
+            guard active else { continue }
+            if let value = values[key] ?? nil {
+                metrics.append(Metric(key: key, slot: slot,
+                                      fraction: value.fraction, color: value.color))
             }
             slot += 1
         }
@@ -337,15 +428,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
 
-        let linesHeader = NSMenuItem(title: "Lines (outermost first)", action: nil, keyEquivalent: "")
+        let linesHeader = NSMenuItem(title: "Lines", action: nil, keyEquivalent: "")
         linesHeader.isEnabled = false
         menu.addItem(linesHeader)
+
+        let auto = NSMenuItem(title: "Automatic — only what matters",
+                              action: #selector(selectAuto), keyEquivalent: "")
+        auto.target = self
+        auto.state = autoMode ? .on : .off
+        menu.addItem(auto)
+
+        let manual = NSMenuItem(title: "Manual", action: #selector(selectManual), keyEquivalent: "")
+        manual.target = self
+        manual.state = autoMode ? .off : .on
+        menu.addItem(manual)
+
         for metric in metricOrder {
             let item = NSMenuItem(title: metric.title,
-                                  action: #selector(toggleMetric(_:)), keyEquivalent: "")
+                                  action: autoMode ? nil : #selector(toggleMetric(_:)),
+                                  keyEquivalent: "")
             item.target = self
+            item.indentationLevel = 1
             item.representedObject = metric.key
-            item.state = isEnabled(metric.key) ? .on : .off
+            item.state = (autoMode ? autoShown.contains(metric.key)
+                                   : isEnabled(metric.key)) ? .on : .off
             menu.addItem(item)
         }
 
@@ -367,6 +473,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         return menu
+    }
+
+    @objc private func selectAuto() {
+        autoMode = true
+        refresh()
+    }
+
+    @objc private func selectManual() {
+        autoMode = false
+        refresh()
     }
 
     @objc private func toggleMetric(_ sender: NSMenuItem) {
