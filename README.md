@@ -33,6 +33,20 @@ boundary.
 
 **Manual** lets you pin exactly the lines you want, from the menu bar icon.
 
+## Hover for numbers
+
+Move the cursor to the line strip and a small tooltip shows the exact values —
+and who's responsible:
+
+- `Battery 83% — charging`
+- `CPU 63%`, with the top consumers below (`Chrome 34% · Xcode 21%`)
+- `Memory 63% — 10.1 GB / 16 GB`, with the top apps by RAM
+- `Net ↓ 8.4 MB/s · Net ↑ 120 KB/s`
+
+The overlay stays fully click-through; hovering is detected by watching the
+cursor position, so no clicks are ever swallowed. Per-app stats are sampled
+(via `ps`) only while the tooltip is visible.
+
 The real thing — actual screen pixels, manual mode, all lines pinned (blue
 battery = full on AC, green CPU = calm, yellow memory = getting warm):
 

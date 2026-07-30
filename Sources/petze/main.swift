@@ -90,8 +90,8 @@ final class CPUSampler {
 
 // MARK: - Memory
 
-/// Fraction of physical RAM in use (active + wired + compressed).
-func memoryUsedFraction() -> Double? {
+/// Physical RAM in use (active + wired + compressed), as fraction and bytes.
+func memoryUsage() -> (fraction: Double, usedBytes: Double)? {
     var stats = vm_statistics64()
     var count = mach_msg_type_number_t(
         MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
@@ -103,7 +103,7 @@ func memoryUsedFraction() -> Double? {
     guard result == KERN_SUCCESS else { return nil }
     let pageSize = Double(vm_kernel_page_size)
     let used = Double(stats.active_count &+ stats.wire_count &+ stats.compressor_page_count) * pageSize
-    return used / Double(ProcessInfo.processInfo.physicalMemory)
+    return (used / Double(ProcessInfo.processInfo.physicalMemory), used)
 }
 
 // MARK: - Network
@@ -256,6 +256,70 @@ final class OverlayView: NSView {
     }
 }
 
+// MARK: - Hover tooltip
+
+/// Small dark panel listing each visible line with its actual value.
+/// The overlay itself is click-through, so hovering is detected by polling
+/// the global mouse location — no events are ever swallowed.
+final class TooltipWindow: NSWindow {
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(contentRect: .zero, styleMask: .borderless,
+                   backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        ignoresMouseEvents = true
+        level = .screenSaver
+        collectionBehavior = [.canJoinAllSpaces, .transient]
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
+        container.layer?.cornerRadius = 8
+        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        label.maximumNumberOfLines = 0
+        container.addSubview(label)
+        contentView = container
+    }
+
+    func show(entries: [(color: NSColor, text: String, detail: String?)],
+              near point: NSPoint, position: LinePosition, screen: NSScreen) {
+        let font = label.font!
+        let detailFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let text = NSMutableAttributedString()
+        for (index, entry) in entries.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: "\n")) }
+            text.append(NSAttributedString(string: "● ", attributes: [
+                .foregroundColor: entry.color, .font: font]))
+            text.append(NSAttributedString(string: entry.text, attributes: [
+                .foregroundColor: NSColor.white, .font: font]))
+            if let detail = entry.detail {
+                text.append(NSAttributedString(string: "\n   " + detail, attributes: [
+                    .foregroundColor: NSColor(calibratedWhite: 0.63, alpha: 1),
+                    .font: detailFont]))
+            }
+        }
+        label.attributedStringValue = text
+        label.sizeToFit()
+
+        let pad: CGFloat = 10
+        label.setFrameOrigin(NSPoint(x: pad, y: pad))
+        let size = NSSize(width: label.frame.width + pad * 2,
+                          height: label.frame.height + pad * 2)
+
+        var origin = NSPoint(x: point.x + 14, y: point.y - size.height - 14)
+        if position == .bottom { origin.y = point.y + 14 }
+        origin.x = max(screen.frame.minX + 8,
+                       min(origin.x, screen.frame.maxX - size.width - 8))
+        origin.y = max(screen.frame.minY + 8,
+                       min(origin.y, screen.frame.maxY - size.height - 8))
+        setFrame(NSRect(origin: origin, size: size), display: true)
+        orderFrontRegardless()
+    }
+}
+
 // MARK: - Overlay window (transparent, click-through, above everything)
 
 final class OverlayWindow: NSWindow {
@@ -281,8 +345,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var windows: [OverlayWindow] = []
     private var timer: Timer?
+    private var hoverTimer: Timer?
     private let cpu = CPUSampler()
     private let net = NetworkSampler()
+    private let tooltip = TooltipWindow()
+
+    // Latest values for the hover tooltip, rebuilt on every refresh.
+    private var hoverEntries: [(key: String, color: NSColor, text: String)] = []
+    private var hoverBandSlots = 0
+    private var tooltipVisible = false
+
+    // Per-app contributors, sampled via ps only while the tooltip is up.
+    private var contribCPU: String?
+    private var contribMem: String?
+    private var contribFetchedAt = Date.distantPast
+    private var fetchingContrib = false
 
     // Keys of lines auto mode is currently showing; entry and exit use
     // different thresholds so lines don't flap at the boundary.
@@ -323,6 +400,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             self?.refresh()
+        }
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            self?.checkHover()
         }
 
         NotificationCenter.default.addObserver(
@@ -369,22 +449,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private static func rate(_ bps: Double) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .decimal
+        return formatter.string(fromByteCount: Int64(bps)) + "/s"
+    }
+
     private func refresh() {
         let battery = BatteryState.read()
         let cpuLoad = cpu.sample()
-        let memUsed = memoryUsedFraction()
+        let memory = memoryUsage()
         let netRates = net.sample()
 
         let values: [String: (fraction: CGFloat, color: NSColor)?] = [
             "battery": battery.isPresent
                 ? (CGFloat(battery.percent), battery.color) : nil,
             "cpu": cpuLoad.map { (CGFloat($0), loadColor($0)) },
-            "memory": memUsed.map { (CGFloat($0), loadColor($0)) },
+            "memory": memory.map { (CGFloat($0.fraction), loadColor($0.fraction)) },
             "netin": netRates.map { (netFraction($0.inBps), NSColor.systemTeal) },
             "netout": netRates.map { (netFraction($0.outBps), NSColor.systemPurple) },
         ]
 
+        let totalRAM = Double(ProcessInfo.processInfo.physicalMemory)
+        let ramFmt = ByteCountFormatter()
+        ramFmt.countStyle = .memory
+        let batteryVerb = battery.isCharging ? "charging"
+            : battery.onAC ? "on AC" : "discharging"
+        let labels: [String: String?] = [
+            "battery": "Battery \(Int((battery.percent * 100).rounded()))% — \(batteryVerb)",
+            "cpu": cpuLoad.map { "CPU \(Int(($0 * 100).rounded()))%" },
+            "memory": memory.map {
+                "Memory \(Int(($0.fraction * 100).rounded()))% — "
+                + "\(ramFmt.string(fromByteCount: Int64($0.usedBytes))) / "
+                + ramFmt.string(fromByteCount: Int64(totalRAM))
+            },
+            "netin": netRates.map { "Net ↓ " + Self.rate($0.inBps) },
+            "netout": netRates.map { "Net ↑ " + Self.rate($0.outBps) },
+        ]
+
         var metrics: [Metric] = []
+        var entries: [(key: String, color: NSColor, text: String)] = []
         var slot = 0 // active metrics keep their row even while a sample is pending
         for (key, _) in metricOrder {
             let active: Bool
@@ -401,18 +505,129 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let value = values[key] ?? nil {
                 metrics.append(Metric(key: key, slot: slot,
                                       fraction: value.fraction, color: value.color))
+                if let text = labels[key] ?? nil {
+                    entries.append((key, value.color, text))
+                }
             }
             slot += 1
         }
+        hoverEntries = entries
+        hoverBandSlots = slot
 
         if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
             let desc = metrics.map { "\($0.key)=\(String(format: "%.2f", $0.fraction))" }
-            FileHandle.standardError.write(Data("metrics: \(desc.joined(separator: " "))\n".utf8))
+            let raw = "auto=\(autoMode) battPresent=\(battery.isPresent) "
+                + "cpu=\(cpuLoad.map { String(format: "%.2f", $0) } ?? "nil") "
+                + "mem=\(memory.map { String(format: "%.2f", $0.fraction) } ?? "nil") "
+                + "net=\(netRates.map { String(format: "%.0f/%.0f", $0.inBps, $0.outBps) } ?? "nil") "
+                + "shown=\(autoShown.sorted())"
+            FileHandle.standardError.write(
+                Data("metrics: \(desc.joined(separator: " ")) | \(raw)\n".utf8))
         }
         for window in windows {
             window.overlayView.update(metrics: metrics, position: position)
         }
         updateStatusItem(with: battery)
+    }
+
+    /// Show the value tooltip while the cursor is inside the line band.
+    private func checkHover() {
+        let mouse = NSEvent.mouseLocation
+        guard !hoverEntries.isEmpty,
+              let screen = NSScreen.screens.first(where: {
+                  NSMouseInRect(mouse, $0.frame, false)
+              })
+        else { hideTooltip(); return }
+
+        let thickness: CGFloat = 4
+        let band = thickness * CGFloat(hoverBandSlots) + 6 // small grace zone
+        let frame = screen.frame
+        let inBand: Bool
+        switch position {
+        case .top:
+            inBand = mouse.y >= frame.maxY - band
+        case .bottom:
+            inBand = mouse.y <= frame.minY + band
+        case .perimeter:
+            inBand = mouse.y >= frame.maxY - band || mouse.y <= frame.minY + band
+                  || mouse.x <= frame.minX + band || mouse.x >= frame.maxX - band
+        }
+
+        if inBand {
+            fetchContributorsIfStale()
+            let entries = hoverEntries.map { entry in
+                (color: entry.color, text: entry.text,
+                 detail: entry.key == "cpu" ? contribCPU
+                       : entry.key == "memory" ? contribMem : nil)
+            }
+            tooltip.show(entries: entries, near: mouse,
+                         position: position, screen: screen)
+            tooltipVisible = true
+        } else {
+            hideTooltip()
+        }
+    }
+
+    /// Top apps by CPU and memory, aggregated from `ps` on a background
+    /// queue. Only runs while the tooltip is showing, at most every 3s.
+    private func fetchContributorsIfStale() {
+        guard !fetchingContrib, Date().timeIntervalSince(contribFetchedAt) > 3 else { return }
+        fetchingContrib = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Self.topProcesses()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.fetchingContrib = false
+                self.contribFetchedAt = Date()
+                self.contribCPU = result.cpu
+                self.contribMem = result.mem
+            }
+        }
+    }
+
+    private static func topProcesses() -> (cpu: String?, mem: String?) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-Aceo", "pcpu,rss,comm"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return (nil, nil) }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return (nil, nil) }
+
+        var cpuByApp: [String: Double] = [:]
+        var rssByApp: [String: Double] = [:]
+        for line in output.split(separator: "\n").dropFirst() {
+            let parts = line.split(separator: " ", maxSplits: 2,
+                                   omittingEmptySubsequences: true)
+            // ps honors the locale: decimals may use a comma (e.g. "0,2")
+            guard parts.count == 3,
+                  let pcpu = Double(parts[0].replacingOccurrences(of: ",", with: ".")),
+                  let rssKB = Double(parts[1])
+            else { continue }
+            let name = String(parts[2])
+            cpuByApp[name, default: 0] += pcpu
+            rssByApp[name, default: 0] += rssKB * 1024
+        }
+
+        let ramFmt = ByteCountFormatter()
+        ramFmt.countStyle = .memory
+        let topCPU = cpuByApp.sorted { $0.value > $1.value }.prefix(3)
+            .filter { $0.value >= 1 }
+            .map { "\($0.key) \(Int($0.value.rounded()))%" }
+            .joined(separator: " · ")
+        let topMem = rssByApp.sorted { $0.value > $1.value }.prefix(3)
+            .map { "\($0.key) \(ramFmt.string(fromByteCount: Int64($0.value)))" }
+            .joined(separator: " · ")
+        return (topCPU.isEmpty ? nil : topCPU, topMem.isEmpty ? nil : topMem)
+    }
+
+    private func hideTooltip() {
+        guard tooltipVisible else { return }
+        tooltip.orderOut(nil)
+        tooltipVisible = false
     }
 
     private func updateStatusItem(with battery: BatteryState) {
