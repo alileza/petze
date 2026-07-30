@@ -323,6 +323,43 @@ final class TooltipWindow: NSWindow {
     }
 }
 
+// MARK: - Sparkline (popover trend chart)
+
+final class SparklineView: NSView {
+    var points: [Double] = [] { didSet { needsDisplay = true } }
+    var color: NSColor = .white { didSet { needsDisplay = true } }
+    /// true → y axis is 0...1 (percent metrics); false → autoscale to peak
+    var fixedRange = true
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 264, height: 32) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.secondaryLabelColor.withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+        guard points.count >= 2 else { return }
+        let peak = fixedRange ? 1 : max(points.max() ?? 1, 1e-9)
+        let inset: CGFloat = 3
+        let w = bounds.width - inset * 2, h = bounds.height - inset * 2
+
+        let path = NSBezierPath()
+        for (i, value) in points.enumerated() {
+            let x = inset + w * CGFloat(i) / CGFloat(points.count - 1)
+            let y = inset + h * CGFloat(min(value / peak, 1))
+            i == 0 ? path.move(to: NSPoint(x: x, y: y))
+                   : path.line(to: NSPoint(x: x, y: y))
+        }
+        let fill = path.copy() as! NSBezierPath
+        fill.line(to: NSPoint(x: inset + w, y: inset))
+        fill.line(to: NSPoint(x: inset, y: inset))
+        fill.close()
+        color.withAlphaComponent(0.15).setFill()
+        fill.fill()
+        path.lineWidth = 1.5
+        color.setStroke()
+        path.stroke()
+    }
+}
+
 // MARK: - Big rings (popover)
 
 final class BigRingsView: NSView {
@@ -391,26 +428,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let net = NetworkSampler()
     private let tooltip = TooltipWindow()
 
-    // Click-the-rings popover: big rings + all values + contributors.
+    // Click-the-rings popover: big rings + trends + values + contributors.
     private let popover = NSPopover()
     private let bigRings = BigRingsView()
-    private let detailText = NSTextField(labelWithString: "")
+    private let rowsStack = NSStackView()
+    private var rowViews: [String: (label: NSTextField, spark: SparklineView,
+                                    detail: NSTextField)] = [:]
+    private var moreButton: NSButton!
+    private var expandedDetails = false
     private var popoverRows: [(key: String, color: NSColor, text: String)] = []
     private var ringData: [(fraction: Double?, color: NSColor)] = []
     private var ringCenter = ""
+
+    // Last hour of samples per metric key, appended every refresh (3s).
+    private var history: [String: [Double]] = [:]
+    private let historyCap = 1200 // 1h at 3s cadence
 
     // Latest values for the hover tooltip, rebuilt on every refresh.
     private var hoverEntries: [(key: String, color: NSColor, text: String)] = []
     private var hoverBandSlots = 0
     private var tooltipVisible = false
 
-    // Per-app contributors, sampled via ps/nettop only while the tooltip is up.
-    private var contribCPU: String?
-    private var contribMem: String?
-    private var contribNetIn: String?
-    private var contribNetOut: String?
+    // Per-app contributors, sampled via ps/nettop only while visible.
+    // CPU entries are percent, memory and network entries are bytes(/s).
+    private var contribCPUList: [(name: String, value: Double)] = []
+    private var contribMemList: [(name: String, value: Double)] = []
+    private var contribNetInList: [(name: String, value: Double)] = []
+    private var contribNetOutList: [(name: String, value: Double)] = []
     private var contribFetchedAt = Date.distantPast
     private var fetchingContrib = false
+
+    /// "Chrome 34% · Xcode 21%" -style summary for a contributor list.
+    private func contribText(_ key: String, limit: Int) -> String? {
+        let ramFmt = ByteCountFormatter()
+        ramFmt.countStyle = .memory
+        let list: [(name: String, value: Double)]
+        let fmt: (Double) -> String
+        switch key {
+        case "cpu": list = contribCPUList; fmt = { "\(Int($0.rounded()))%" }
+        case "memory": list = contribMemList
+            fmt = { ramFmt.string(fromByteCount: Int64($0)) }
+        case "netin": list = contribNetInList; fmt = Self.rate
+        case "netout": list = contribNetOutList; fmt = Self.rate
+        default: return nil
+        }
+        let top = list.prefix(limit).map { "\($0.name) \(fmt($0.value))" }
+        return top.isEmpty ? nil : top.joined(separator: expandedDetails && limit > 3
+                                              ? "\n   " : " · ")
+    }
 
     // Keys of lines auto mode is currently showing; entry and exit use
     // different thresholds so lines don't flap at the boundary.
@@ -447,16 +512,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
 
-        detailText.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        detailText.maximumNumberOfLines = 0
+        let caption = NSTextField(labelWithString: "trend · last 60 min")
+        caption.font = .systemFont(ofSize: 10, weight: .medium)
+        caption.textColor = .tertiaryLabelColor
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .leading
+        rowsStack.spacing = 10
+
+        moreButton = NSButton(title: "More details", target: self,
+                              action: #selector(toggleDetails))
+        moreButton.bezelStyle = .inline
+        moreButton.controlSize = .small
         let quit = NSButton(title: "Quit petze", target: NSApp,
                             action: #selector(NSApplication.terminate(_:)))
         quit.bezelStyle = .inline
         quit.controlSize = .small
-        let stack = NSStackView(views: [bigRings, detailText, quit])
+        let buttons = NSStackView(views: [moreButton, quit])
+        buttons.orientation = .horizontal
+        buttons.spacing = 12
+
+        let stack = NSStackView(views: [bigRings, caption, rowsStack, buttons])
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 14
+        stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 12, right: 18)
         let controller = NSViewController()
         controller.view = stack
@@ -590,6 +669,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverEntries = entries
         hoverBandSlots = slot
 
+        // Record history for the trend charts (battery/cpu/mem as fractions,
+        // network as bytes/sec).
+        let samplesByKey: [String: Double?] = [
+            "battery": battery.isPresent ? battery.percent : nil,
+            "cpu": cpuLoad,
+            "memory": memory?.fraction,
+            "netin": netRates?.inBps,
+            "netout": netRates?.outBps,
+        ]
+        for (key, sample) in samplesByKey {
+            guard let sample else { continue }
+            history[key, default: []].append(sample)
+            if history[key]!.count > historyCap {
+                history[key]!.removeFirst(history[key]!.count - historyCap)
+            }
+        }
+
         // Popover always shows every metric, independent of line visibility.
         popoverRows = metricOrder.compactMap { key, _ in
             guard let value = values[key] ?? nil, let text = labels[key] ?? nil
@@ -654,10 +750,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fetchContributorsIfStale()
             let entries = hoverEntries.map { entry in
                 (color: entry.color, text: entry.text,
-                 detail: entry.key == "cpu" ? contribCPU
-                       : entry.key == "memory" ? contribMem
-                       : entry.key == "netin" ? contribNetIn
-                       : entry.key == "netout" ? contribNetOut : nil)
+                 detail: contribText(entry.key, limit: 3))
             }
             tooltip.show(entries: entries, near: mouse,
                          position: position, screen: screen)
@@ -679,38 +772,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let processes = Self.topProcesses()
             DispatchQueue.main.async {
-                self?.contribCPU = processes.cpu
-                self?.contribMem = processes.mem
+                self?.contribCPUList = processes.cpu
+                self?.contribMemList = processes.mem
                 if self?.popover.isShown == true { self?.updatePopoverContent() }
             }
-            let network = wantNet ? Self.topNetwork() : (nil, nil)
-            if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
-                FileHandle.standardError.write(Data(
-                    "contrib: wantNet=\(wantNet) in=\(network.0 ?? "nil") out=\(network.1 ?? "nil")\n".utf8))
-            }
+            let network = wantNet ? Self.topNetwork() : ([], [])
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.fetchingContrib = false
                 self.contribFetchedAt = Date()
-                self.contribNetIn = network.0
-                self.contribNetOut = network.1
+                self.contribNetInList = network.0
+                self.contribNetOutList = network.1
                 if self.popover.isShown { self.updatePopoverContent() }
             }
         }
     }
 
     /// Per-app network rates from two nettop samples taken 1s apart.
-    private static func topNetwork() -> (String?, String?) {
+    private static func topNetwork() -> ([(name: String, value: Double)],
+                                         [(name: String, value: Double)]) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
         task.arguments = ["-P", "-x", "-L", "2", "-s", "1", "-J", "bytes_in,bytes_out"]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
-        guard (try? task.run()) != nil else { return (nil, nil) }
+        guard (try? task.run()) != nil else { return ([], []) }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
-        guard let output = String(data: data, encoding: .utf8) else { return (nil, nil) }
+        guard let output = String(data: data, encoding: .utf8) else { return ([], []) }
 
         // Rows are "process.pid,bytes_in,bytes_out,"; each sample block is
         // preceded by a ",bytes_in,bytes_out," header row. Counters are
@@ -734,10 +824,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !current.isEmpty { samples.append(current) }
         guard samples.count >= 2, let first = samples.first, let last = samples.last
-        else { return (nil, nil) }
+        else { return ([], []) }
 
-        var inRates: [(String, Double)] = []
-        var outRates: [(String, Double)] = []
+        var inRates: [(name: String, value: Double)] = []
+        var outRates: [(name: String, value: Double)] = []
         for (name, counts) in last {
             let earlier = first[name] ?? (0, 0)
             let dIn = max(0, counts.inBytes - earlier.inBytes)
@@ -745,26 +835,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if dIn >= 5_000 { inRates.append((name, dIn)) }
             if dOut >= 5_000 { outRates.append((name, dOut)) }
         }
-        func fmt(_ list: [(String, Double)]) -> String? {
-            let top = list.sorted { $0.1 > $1.1 }.prefix(3)
-                .map { "\($0.0) \(rate($0.1))" }
-                .joined(separator: " · ")
-            return top.isEmpty ? nil : top
-        }
-        return (fmt(inRates), fmt(outRates))
+        return (inRates.sorted { $0.value > $1.value },
+                outRates.sorted { $0.value > $1.value })
     }
 
-    private static func topProcesses() -> (cpu: String?, mem: String?) {
+    private static func topProcesses() -> (cpu: [(name: String, value: Double)],
+                                           mem: [(name: String, value: Double)]) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/ps")
         task.arguments = ["-Aceo", "pcpu,rss,comm"]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
-        guard (try? task.run()) != nil else { return (nil, nil) }
+        guard (try? task.run()) != nil else { return ([], []) }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
-        guard let output = String(data: data, encoding: .utf8) else { return (nil, nil) }
+        guard let output = String(data: data, encoding: .utf8) else { return ([], []) }
 
         var cpuByApp: [String: Double] = [:]
         var rssByApp: [String: Double] = [:]
@@ -780,17 +866,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cpuByApp[name, default: 0] += pcpu
             rssByApp[name, default: 0] += rssKB * 1024
         }
-
-        let ramFmt = ByteCountFormatter()
-        ramFmt.countStyle = .memory
-        let topCPU = cpuByApp.sorted { $0.value > $1.value }.prefix(3)
-            .filter { $0.value >= 1 }
-            .map { "\($0.key) \(Int($0.value.rounded()))%" }
-            .joined(separator: " · ")
-        let topMem = rssByApp.sorted { $0.value > $1.value }.prefix(3)
-            .map { "\($0.key) \(ramFmt.string(fromByteCount: Int64($0.value)))" }
-            .joined(separator: " · ")
-        return (topCPU.isEmpty ? nil : topCPU, topMem.isEmpty ? nil : topMem)
+        return (cpuByApp.filter { $0.value >= 1 }
+                    .sorted { $0.value > $1.value }.map { ($0.key, $0.value) },
+                rssByApp.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
     }
 
     private func hideTooltip() {
@@ -850,29 +928,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func toggleDetails() {
+        expandedDetails.toggle()
+        moreButton.title = expandedDetails ? "Fewer details" : "More details"
+        updatePopoverContent()
+    }
+
     private func updatePopoverContent() {
         bigRings.rings = ringData
         bigRings.centerText = ringCenter
 
         let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
         let detailFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        let text = NSMutableAttributedString()
-        for (index, row) in popoverRows.enumerated() {
-            if index > 0 { text.append(NSAttributedString(string: "\n")) }
-            text.append(NSAttributedString(string: "● ", attributes: [
-                .foregroundColor: row.color, .font: font]))
-            text.append(NSAttributedString(string: row.text, attributes: [
-                .foregroundColor: NSColor.labelColor, .font: font]))
-            let detail = row.key == "cpu" ? contribCPU
-                       : row.key == "memory" ? contribMem
-                       : row.key == "netin" ? contribNetIn
-                       : row.key == "netout" ? contribNetOut : nil
-            if let detail {
-                text.append(NSAttributedString(string: "\n   " + detail, attributes: [
-                    .foregroundColor: NSColor.secondaryLabelColor, .font: detailFont]))
-            }
+        let liveKeys = popoverRows.map(\.key)
+
+        for (key, views) in rowViews where !liveKeys.contains(key) {
+            views.label.superview?.removeFromSuperview() // the row stack
+            rowViews[key] = nil
         }
-        detailText.attributedStringValue = text
+
+        for (rowIndex, row) in popoverRows.enumerated() {
+            let views: (label: NSTextField, spark: SparklineView, detail: NSTextField)
+            if let existing = rowViews[row.key] {
+                views = existing
+            } else {
+                let label = NSTextField(labelWithString: "")
+                let spark = SparklineView()
+                spark.fixedRange = !row.key.hasPrefix("net")
+                let detail = NSTextField(labelWithString: "")
+                detail.font = detailFont
+                detail.textColor = .secondaryLabelColor
+                detail.maximumNumberOfLines = 0
+                let rowStack = NSStackView(views: [label, spark, detail])
+                rowStack.orientation = .vertical
+                rowStack.alignment = .leading
+                rowStack.spacing = 4
+                rowsStack.insertArrangedSubview(
+                    rowStack, at: min(rowIndex, rowsStack.arrangedSubviews.count))
+                views = (label, spark, detail)
+                rowViews[row.key] = views
+            }
+
+            let title = NSMutableAttributedString()
+            title.append(NSAttributedString(string: "● ", attributes: [
+                .foregroundColor: row.color, .font: font]))
+            title.append(NSAttributedString(string: row.text, attributes: [
+                .foregroundColor: NSColor.labelColor, .font: font]))
+            views.label.attributedStringValue = title
+            views.spark.points = history[row.key] ?? []
+            views.spark.color = row.color
+            let detail = contribText(row.key, limit: expandedDetails ? 8 : 3)
+            views.detail.stringValue = detail.map { "   " + $0 } ?? ""
+            views.detail.isHidden = detail == nil
+        }
     }
 
 }

@@ -76,8 +76,10 @@ middle = CPU, inner = memory — using the same color language as the lines.
 Hover it for the exact numbers.
 
 **Click the rings** for the full picture: a popover with big rings, every
-metric's exact value, and the apps responsible for CPU, memory, and network
-usage. Quit from the bottom of the popover.
+metric's exact value, a trend chart of the last hour per metric, and the
+apps responsible for CPU, memory, and network usage. "More details" expands
+the per-app lists from the top 3 to the top 8. Quit from the bottom of the
+popover.
 
 ## Overlay position
 
