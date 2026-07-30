@@ -152,13 +152,14 @@ func netFraction(_ bps: Double) -> CGFloat {
 // MARK: - Overlay position
 
 enum LinePosition: String, CaseIterable {
-    case top, bottom, perimeter
+    case top, bottom, perimeter, off
 
     var title: String {
         switch self {
         case .top: return "Top edge"
         case .bottom: return "Bottom edge"
         case .perimeter: return "Around screen"
+        case .off: return "Hidden — menu bar only"
         }
     }
 }
@@ -251,6 +252,8 @@ final class OverlayView: NSView {
             path.addLine(to: CGPoint(x: r.maxX, y: r.minY)) // right
             path.addLine(to: CGPoint(x: r.minX, y: r.minY)) // bottom
             path.addLine(to: CGPoint(x: r.minX, y: r.maxY)) // left
+        case .off:
+            break // no overlay; the menu bar rings carry the signal
         }
         return path
     }
@@ -527,9 +530,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Data("metrics: \(desc.joined(separator: " ")) | \(raw)\n".utf8))
         }
         for window in windows {
-            window.overlayView.update(metrics: metrics, position: position)
+            window.overlayView.update(metrics: position == .off ? [] : metrics,
+                                      position: position)
         }
-        updateStatusItem(with: battery)
+        updateStatusItem(with: battery, cpu: cpuLoad, mem: memory?.fraction)
     }
 
     /// Show the value tooltip while the cursor is inside the line band.
@@ -553,6 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .perimeter:
             inBand = mouse.y >= frame.maxY - band || mouse.y <= frame.minY + band
                   || mouse.x <= frame.minX + band || mouse.x >= frame.maxX - band
+        case .off:
+            inBand = false
         }
 
         if inBand {
@@ -701,13 +707,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tooltipVisible = false
     }
 
-    private func updateStatusItem(with battery: BatteryState) {
+    /// Tiny concentric rings, activity-rings style: outer = battery,
+    /// middle = CPU, inner = memory. Same color language as the lines.
+    private static func ringsImage(battery: BatteryState,
+                                   cpu: Double?, mem: Double?) -> NSImage {
+        let side: CGFloat = 18
+        return NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            let center = NSPoint(x: side / 2, y: side / 2)
+            func ring(_ fraction: Double?, _ color: NSColor, _ radius: CGFloat) {
+                let track = NSBezierPath()
+                track.appendArc(withCenter: center, radius: radius,
+                                startAngle: 0, endAngle: 360)
+                track.lineWidth = 2.0
+                color.withAlphaComponent(0.30).setStroke()
+                track.stroke()
+                guard let fraction, fraction > 0.02 else { return }
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: center, radius: radius,
+                              startAngle: 90,
+                              endAngle: 90 - 360 * min(fraction, 1),
+                              clockwise: true)
+                arc.lineWidth = 2.0
+                arc.lineCapStyle = .round
+                color.setStroke()
+                arc.stroke()
+            }
+            ring(battery.isPresent ? battery.percent : nil, battery.color, 7.4)
+            ring(cpu, cpu.map { loadColor($0) } ?? .gray, 4.7)
+            ring(mem, mem.map { loadColor($0) } ?? .gray, 2.0)
+            return true
+        }
+    }
+
+    private func updateStatusItem(with battery: BatteryState,
+                                  cpu: Double?, mem: Double?) {
         guard let button = statusItem.button else { return }
-        let symbol = battery.isCharging ? "bolt.fill" : "minus"
-        let percent = Int((battery.percent * 100).rounded())
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "petze")
-        button.title = battery.isPresent ? " \(percent)%" : ""
-        button.imagePosition = .imageLeading
+        button.image = Self.ringsImage(battery: battery, cpu: cpu, mem: mem)
+        button.image?.isTemplate = false
+        button.title = ""
+        button.toolTip = hoverEntries.map(\.text).joined(separator: "\n")
         statusItem.menu = buildMenu()
     }
 
