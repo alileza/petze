@@ -1,0 +1,5 @@
+.build/
+batmon.app/
+.DS_Store
+*.log
+.swiftpm/
