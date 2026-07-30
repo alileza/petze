@@ -314,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             slot += 1
         }
 
-        if ProcessInfo.processInfo.environment["BATMON_DEBUG"] != nil {
+        if ProcessInfo.processInfo.environment["PETZE_DEBUG"] != nil {
             let desc = metrics.map { "\($0.key)=\(String(format: "%.2f", $0.fraction))" }
             FileHandle.standardError.write(Data("metrics: \(desc.joined(separator: " "))\n".utf8))
         }
@@ -328,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         let symbol = battery.isCharging ? "bolt.fill" : "minus"
         let percent = Int((battery.percent * 100).rounded())
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "batmon")
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "petze")
         button.title = battery.isPresent ? " \(percent)%" : ""
         button.imagePosition = .imageLeading
         statusItem.menu = buildMenu()
@@ -363,7 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit batmon",
+        let quit = NSMenuItem(title: "Quit petze",
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         return menu

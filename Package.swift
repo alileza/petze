@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "batmon",
+    name: "petze",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "batmon", path: "Sources/batmon")
+        .executableTarget(name: "petze", path: "Sources/petze")
     ]
 )

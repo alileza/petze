@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>batmon — your laptop's health as a line on the edge of your screen</title>
+<title>petze — your laptop's health as a line on the edge of your screen</title>
 <meta name="description" content="A tiny native macOS menu bar app that draws battery, CPU, and memory as thin animated lines along the edge of your screen. No Dock icon, no windows, no cloud.">
-<meta property="og:title" content="batmon — laptop health lines for macOS">
+<meta property="og:title" content="petze — laptop health lines for macOS">
 <meta property="og:description" content="Battery, CPU, and memory as thin color-coded lines on the edge of your screen. Native AppKit, ~350 lines of Swift.">
 <meta property="og:type" content="website">
 
@@ -163,7 +163,7 @@
     font-size: 12.5px; color: #c9d1d9; font-weight: 600;
     backdrop-filter: blur(6px);
   }
-  .preview .menubar .batmon-item {
+  .preview .menubar .petze-item {
     display: inline-flex; align-items: center; gap: 4px;
     background: rgba(255,255,255,0.12); padding: 3px 9px; border-radius: 6px;
   }
@@ -271,13 +271,13 @@
 <header class="nav">
   <div class="brand">
     <span class="mark">b</span>
-    <span class="name">batmon</span>
+    <span class="name">petze</span>
   </div>
   <nav class="links">
     <a href="#features">Features</a>
     <a href="#colors">Colors</a>
     <a href="#quickstart">Quick start</a>
-    <a href="https://github.com/alileza/batmon" class="primary">GitHub →</a>
+    <a href="https://github.com/alileza/petze" class="primary">GitHub →</a>
   </nav>
 </header>
 
@@ -287,23 +287,23 @@
   <span class="eyebrow"><span class="dot"></span> Native macOS · menu bar only</span>
   <h1>Your laptop's health, drawn as a line on the edge of your screen.</h1>
   <p class="lede">
-    batmon renders battery, CPU, and memory as thin color-coded lines that hug the
+    petze renders battery, CPU, and memory as thin color-coded lines that hug the
     edge of your display — always visible, never in the way. No Dock icon, no
     windows, no cloud. Just ~350 lines of Swift and AppKit.
   </p>
   <div class="cta-row">
-    <a class="btn primary" href="https://github.com/alileza/batmon">View on GitHub</a>
+    <a class="btn primary" href="https://github.com/alileza/petze">View on GitHub</a>
     <a class="btn secondary" href="#quickstart">Build in 30 seconds</a>
   </div>
 
-  <div class="preview" aria-label="Mock desktop showing batmon's health lines">
+  <div class="preview" aria-label="Mock desktop showing petze's health lines">
     <div class="lines">
       <div class="line battery"></div>
       <div class="line cpu"></div>
       <div class="line memory"></div>
     </div>
     <div class="menubar">
-      <span class="batmon-item">⚡ 83%</span>
+      <span class="petze-item">⚡ 83%</span>
       <span>Wed 00:45</span>
     </div>
     <div class="desk">
@@ -400,13 +400,13 @@
     <p>Requires macOS 13+ and Xcode command line tools. No dependencies.</p>
   </div>
   <div class="quickstart">
-<pre><span class="prompt">$</span> git clone https://github.com/alileza/batmon.git
-<span class="prompt">$</span> cd batmon
-<span class="prompt">$</span> ./make-app.sh          <span class="comment"># builds release binary + batmon.app</span>
-<span class="prompt">$</span> open batmon.app         <span class="comment"># lines appear; configure via the ⚡ menu bar icon</span>
+<pre><span class="prompt">$</span> git clone https://github.com/alileza/petze.git
+<span class="prompt">$</span> cd petze
+<span class="prompt">$</span> ./make-app.sh          <span class="comment"># builds release binary + petze.app</span>
+<span class="prompt">$</span> open petze.app         <span class="comment"># lines appear; configure via the ⚡ menu bar icon</span>
 
 <span class="comment"># optional: start at login</span>
-<span class="comment"># System Settings → General → Login Items → add batmon.app</span></pre>
+<span class="comment"># System Settings → General → Login Items → add petze.app</span></pre>
   </div>
 </section>
 
@@ -414,10 +414,10 @@
 
 <footer>
   <div class="inner">
-    <span>batmon — laptop health lines for macOS</span>
+    <span>petze — laptop health lines for macOS</span>
     <span class="grow"></span>
-    <a href="https://github.com/alileza/batmon">GitHub</a>
-    <a href="https://github.com/alileza/batmon/issues">Issues</a>
+    <a href="https://github.com/alileza/petze">GitHub</a>
+    <a href="https://github.com/alileza/petze/issues">Issues</a>
   </div>
 </footer>
 

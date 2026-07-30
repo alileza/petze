@@ -1,4 +1,4 @@
-# batmon
+# petze
 
 A tiny macOS menu bar app that shows your laptop's health as thin lines drawn
 on the edge of your screen. Each line's length is the metric's level; its
@@ -41,14 +41,14 @@ appears on every connected display and every Space.
 
 ```bash
 swift build -c release
-.build/release/batmon
+.build/release/petze
 ```
 
 Or bundle it as an app (so you can put it in Applications / Login Items):
 
 ```bash
 ./make-app.sh
-open batmon.app
+open petze.app
 ```
 
-Quit from the menu bar icon → "Quit batmon".
+Quit from the menu bar icon → "Quit petze".
